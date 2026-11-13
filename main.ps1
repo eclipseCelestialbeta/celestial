@@ -18,7 +18,7 @@ $TrustedSignerThumbprint = ''
 $LaunchElevated = $false
 
 function Assert-Exe($ExePath, $ExpectedSha256, $ExpectedThumbprint) {
-    if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) { throw 'Release is missing Celestial.exe.' }
+    if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) { throw 'Release is missing Nova Application.exe.' }
     $h = (Get-FileHash -LiteralPath $ExePath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($h -ne $ExpectedSha256.ToLowerInvariant()) { throw 'Executable hash mismatch.' }
     if ($ExpectedThumbprint) {
@@ -96,18 +96,18 @@ try {
         Expand-Archive -LiteralPath $zipPath -DestinationPath $staging -Force
         # Reject unexpected or missing release entries. No source, BAT or scripts are needed.
         $entries = @(Get-ChildItem -LiteralPath $staging -Recurse -File)
-        $allowed = @('Celestial.exe', 'celestial_preview_black.png', 'celestial_preview_white.png')
+        $allowed = @('Nova Application.exe', 'celestial_preview_black.png', 'celestial_preview_white.png')
         if ($entries.Count -ne 3 -or @($entries | Where-Object {
             $_.Name -cnotin $allowed -or $_.DirectoryName -ne $staging
         }).Count -gt 0) {
             throw 'Unexpected files in release package.'
         }
-        Assert-Exe (Join-Path $staging 'Celestial.exe') $session.exeSha256 $TrustedSignerThumbprint
+        Assert-Exe (Join-Path $staging 'Nova Application.exe') $session.exeSha256 $TrustedSignerThumbprint
         if (-not (Test-Path -LiteralPath $releaseDir)) {
             [IO.Directory]::Move($staging, $releaseDir)
         } else {
             # Existing release may be running: leave it untouched, but verify it before use.
-            Assert-Exe (Join-Path $releaseDir 'Celestial.exe') $session.exeSha256 $TrustedSignerThumbprint
+            Assert-Exe (Join-Path $releaseDir 'Nova Application.exe') $session.exeSha256 $TrustedSignerThumbprint
         }
     } finally {
         if (Test-Path -LiteralPath $zipPath) {
@@ -130,7 +130,7 @@ try {
         }
     }
     Write-Host "[+] Release $($session.version) verified. Starting..." -ForegroundColor Green
-    $binaryPath = Join-Path $releaseDir 'Celestial.exe'
+    $binaryPath = Join-Path $releaseDir 'Nova Application.exe'
     if ($LaunchElevated) {
         # A normal Windows UAC confirmation is displayed; elevation is never silent.
         Start-Process -FilePath $binaryPath -WorkingDirectory $releaseDir -Verb RunAs
