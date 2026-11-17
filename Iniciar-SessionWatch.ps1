@@ -21,6 +21,4 @@ if ($proc.HasExited) {
     Write-Host "[ERROR] Monitor exited. See $log" -ForegroundColor Red
     return
 }
-Write-Host "[+] Session Watch running (PID $($proc.Id))." -ForegroundColor Green
-Write-Host '[*] No tray icon. Visible in Task Manager as SessionWatch.exe.'
-Write-Host '[*] Stop with Parar-SessionWatch.ps1. No automatic start at Windows login.'
+# Startup success is reported by the public launcher; failures still surface.

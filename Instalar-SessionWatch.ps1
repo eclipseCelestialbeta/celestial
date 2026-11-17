@@ -13,7 +13,4 @@ if (-not (Test-Path -LiteralPath $source)) { throw 'SessionWatch.cs not found.' 
 New-Item -ItemType Directory -Path $folder -Force | Out-Null
 & $compiler /nologo /target:winexe /optimize+ /platform:anycpu "/out:$binary" /reference:System.Management.dll "$source"
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $binary)) { throw "Compilation failed ($LASTEXITCODE)." }
-Write-Host '[+] Session Watch compiled locally.' -ForegroundColor Green
-Write-Host "[+] EXE: $binary"
-Write-Host "[+] SHA256: $((Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash)"
-Write-Host '[*] It has no tray icon, no startup task, and stays visible in Task Manager.'
+# Build success is reported by the public launcher; build errors still surface.
