@@ -162,4 +162,166 @@ try {
         }
     }
     # Retain the validated license in this PowerShell process only while the monitor runs.
-    # Each new game session is revalidat
+    # Each new game session is revalidated against Cloudflare (no bypass of revoked keys).
+    $monitorKey = $licenseKey
+    $licenseKey = $null
+
+    $zipPath = Join-Path $appDir ('release-' + [Guid]::NewGuid().ToString('N') + '.zip')
+    $releaseRoot = Join-Path $appDir 'releases'
+    [IO.Directory]::CreateDirectory($releaseRoot) | Out-Null
+    $releaseDir = Join-Path $releaseRoot $session.sha256.ToLowerInvariant()
+    $staging = Join-Path $releaseRoot ('staging-' + [Guid]::NewGuid().ToString('N'))
+    try {
+        Write-Host '[*] Retrieving authorized release...' -ForegroundColor Cyan
+        Invoke-WebRequest -Uri "$ApiBase/v1/download" -Headers @{
+            Authorization = 'Bearer ' + $session.accessToken
+        } -OutFile $zipPath -UseBasicParsing -TimeoutSec 180
+        $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($zipHash -ne $session.sha256.ToLowerInvariant()) {
+            throw 'Package integrity verification failed.'
+        }
+        [IO.Directory]::CreateDirectory($staging) | Out-Null
+        Expand-Archive -LiteralPath $zipPath -DestinationPath $staging -Force
+        $entries = @(Get-ChildItem -LiteralPath $staging -Recurse -File)
+        $allowed = @('Nova Application.exe', 'celestial_preview_black.png', 'celestial_preview_white.png')
+        if ($entries.Count -ne 3 -or @($entries | Where-Object {
+            $_.Name -cnotin $allowed -or $_.DirectoryName -ne $staging
+        }).Count -gt 0) {
+            throw 'Unexpected files in release package.'
+        }
+        Assert-Exe (Join-Path $staging 'Nova Application.exe') $session.exeSha256 $TrustedSignerThumbprint
+        if (-not (Test-Path -LiteralPath $releaseDir)) {
+            [IO.Directory]::Move($staging, $releaseDir)
+        } else {
+            Assert-Exe (Join-Path $releaseDir 'Nova Application.exe') $session.exeSha256 $TrustedSignerThumbprint
+        }
+    } finally {
+        if (Test-Path -LiteralPath $zipPath) {
+            Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $staging) {
+            Remove-Item -LiteralPath $staging -Force -Recurse -ErrorAction SilentlyContinue
+        }
+    }
+
+    foreach ($avatar in @('celestial_preview_black.png', 'celestial_preview_white.png')) {
+        $image = Join-Path $releaseDir $avatar
+        if (Test-Path -LiteralPath $image -PathType Leaf) {
+            try {
+                Copy-Item -LiteralPath $image -Destination (Join-Path $env:TEMP $avatar) -Force -ErrorAction Stop
+            } catch [System.IO.IOException] {
+                Write-Warning "Image in use: $avatar. Keeping existing image."
+            }
+        }
+    }
+    Write-Host "[+] Release $($session.version) verified. Game-aware launcher ready." -ForegroundColor Green
+    $binaryPath = Join-Path $releaseDir 'Nova Application.exe'
+
+    # Visible, user-controlled supervisor: no Windows service, no startup task.
+    # A second invocation cannot start a second watcher in the same logon session.
+    $guard = [System.Threading.Mutex]::new($false, 'Local\CelestialEclipseRobloxLauncher')
+    $guardOwned = $false
+    $panelProc = $null
+    try {
+        try {
+            $guardOwned = $guard.WaitOne(0, $false)
+        } catch [System.Threading.AbandonedMutexException] {
+            $guardOwned = $true
+        }
+        if (-not $guardOwned) {
+            throw 'The Roblox session launcher is already running. Use its existing PowerShell window.'
+        }
+        Write-Host '[*] Key accepted. Waiting for Roblox. Keep this PowerShell window open.' -ForegroundColor Cyan
+        Write-Host '[*] F4 closes the panel while Roblox is open. Ctrl+C ends this monitor.' -ForegroundColor DarkGray
+
+        while ($true) {
+            # Get-RobloxSession returns a real foreground-capable game window.
+            # This avoids running the EXE before Roblox has created its window.
+            $game = Get-RobloxSession
+            if ($null -eq $game) {
+                Start-Sleep -Milliseconds 1200
+                continue
+            }
+            $gamePid = [int]$game.Id
+            $gameWindow = $game.MainWindowHandle.ToInt64()
+            Write-Host "[*] Roblox detected (PID $gamePid). Waiting for game window to stabilize..." -ForegroundColor Cyan
+            Start-Sleep -Seconds 3
+            $stableGame = Get-RobloxSession
+            if ($null -eq $stableGame -or [int]$stableGame.Id -ne $gamePid -or
+                $stableGame.MainWindowHandle.ToInt64() -ne $gameWindow) {
+                continue
+            }
+
+            # Re-check the license server on EACH new Roblox game session.
+            # If the server has a new release, refuse to run an outdated cached binary.
+            Write-Host '[*] Revalidating license for the new game session...' -ForegroundColor Cyan
+            $sessionNow = Invoke-LicenseLogin $monitorKey $deviceHash $ApiBase
+            if ($sessionNow.sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or
+                $sessionNow.exeSha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+                throw 'Server returned an invalid release manifest.'
+            }
+            if ($sessionNow.sha256.ToLowerInvariant() -ne $session.sha256.ToLowerInvariant() -or
+                $sessionNow.exeSha256.ToLowerInvariant() -ne $session.exeSha256.ToLowerInvariant()) {
+                throw 'A newer release is available. Restart the launcher to download and verify it.'
+            }
+            Assert-Exe $binaryPath $session.exeSha256 $TrustedSignerThumbprint
+
+            $stableGame = Get-RobloxSession
+            if ($null -eq $stableGame -or [int]$stableGame.Id -ne $gamePid -or
+                $stableGame.MainWindowHandle.ToInt64() -ne $gameWindow) {
+                continue
+            }
+
+            # Never stop another unrelated process: only manage the process we start.
+            $existingPanels = @(Get-Process -Name 'Nova Application' -ErrorAction SilentlyContinue)
+            if ($existingPanels.Count -gt 0) {
+                Write-Warning 'Nova Application.exe is already running. Close the old panel with F4; then monitoring will continue.'
+                while (@(Get-Process -Name 'Nova Application' -ErrorAction SilentlyContinue).Count -gt 0) {
+                    Start-Sleep -Milliseconds 1500
+                }
+                continue
+            }
+
+            Write-Host '[+] Roblox is ready. Launching Nova Application.exe...' -ForegroundColor Green
+            if ($LaunchElevated) {
+                $panelProc = Start-Process -FilePath $binaryPath -WorkingDirectory $releaseDir -Verb RunAs -PassThru
+            } else {
+                $panelProc = Start-Process -FilePath $binaryPath -WorkingDirectory $releaseDir -PassThru
+            }
+            $panelClosedByUser = $false
+            while ($true) {
+                Start-Sleep -Milliseconds 900
+                try {
+                    $panelProc.Refresh()
+                    if ($panelProc.HasExited) {
+                        $panelClosedByUser = $true
+                        break
+                    }
+                } catch {
+                    $panelClosedByUser = $true
+                    break
+                }
+                $currentGame = Get-RobloxSession
+                if ($null -eq $currentGame -or [int]$currentGame.Id -ne $gamePid -or
+                    $currentGame.MainWindowHandle.ToInt64() -ne $gameWindow) {
+                    break
+                }
+            }
+            if ($panelClosedByUser) {
+                Write-Host '[*] Nova Application closed while Roblox was active. Ending monitor (F4/manual exit).' -ForegroundColor Yellow
+                break
+            }
+            Write-Host '[*] Roblox session ended. Closing the old panel and waiting for a new Roblox session...' -ForegroundColor Yellow
+            Stop-OwnedPanel $panelProc
+            $panelProc = $null
+        }
+    } finally {
+        if ($null -ne $panelProc) { Stop-OwnedPanel $panelProc }
+        $monitorKey = $null
+        if ($guardOwned) { $guard.ReleaseMutex() }
+        if ($null -ne $guard) { $guard.Dispose() }
+    }
+} catch {
+    Write-Host ('[ERROR] ' + $_.Exception.Message) -ForegroundColor Red
+    throw
+}
