@@ -48,7 +48,7 @@ try {
     $psExe = Join-Path $PSHOME 'powershell.exe'
     $quotedLauncher = '"' + $LauncherPath + '"'
     $script:monitor = Start-Process -FilePath $psExe -ArgumentList @(
-        '-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-File', $quotedLauncher, '-TrayMode' 
+        '-NoProfile', '-STA', '-ExecutionPolicy', 'RemoteSigned', '-WindowStyle', 'Hidden', '-File', $quotedLauncher, '-TrayMode' 
     ) -WindowStyle Hidden -PassThru
 
     $script:context = New-Object System.Windows.Forms.ApplicationContext

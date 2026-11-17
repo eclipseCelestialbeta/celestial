@@ -1,5 +1,5 @@
 # CELESTIAL ECLIPSE - Official Tray Launcher
-# Version: launcher tray integration for release 1.0.4.
+# Version: launcher tray integration for release 1.0.4; process-only script permission fix.
 # Intended invocation: iex (irm 'https://raw.githubusercontent.com/eclipseCelestialbeta/celestial/main/main.ps1')
 # Visible notification-area control, no Windows service, startup task, or persistence at sign-in.
 Set-StrictMode -Version Latest
@@ -28,6 +28,34 @@ function Test-MonitorAlreadyActive {
     }
 }
 
+# The GitHub entry point runs in memory (iex), but Windows can block local .ps1 files.
+# Ask the user before relaxing the process-only policy. Never change CurrentUser or LocalMachine.
+function Ensure-LocalScriptPolicy {
+    $policy = Get-ExecutionPolicy
+    if ($policy -notin @('Restricted', 'AllSigned')) { return }
+
+    $machine = Get-ExecutionPolicy -Scope MachinePolicy
+    $user = Get-ExecutionPolicy -Scope UserPolicy
+    if ($machine -ne 'Undefined' -or $user -ne 'Undefined') {
+        throw ('Windows policy is managed by an administrator (MachinePolicy=' + $machine + ', UserPolicy=' + $user + '). Ask your administrator for an approved signed launcher. No policy was changed.')
+    }
+
+    Write-Host '[!] Windows currently blocks local PowerShell script files.' -ForegroundColor Yellow
+    Write-Host '[*] The launcher needs to run client-main.ps1 and Celestial-Tray-Host.ps1 downloaded from your GitHub repository.' -ForegroundColor Yellow
+    Write-Host '[*] Review the repository files before approving. This will affect only this PowerShell session and its children, NOT system or user policy.' -ForegroundColor Cyan
+    $answer = Read-Host 'Temporarily allow local scripts for this session? Type YES to proceed'
+    if ($answer -cne 'YES') {
+        throw 'Cancelled. No execution policy changed.'
+    }
+
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop
+    $active = Get-ExecutionPolicy
+    if ($active -in @('Restricted', 'AllSigned')) {
+        throw ('Local script execution is still blocked (policy: ' + $active + '). Use a signed script distributed by a trusted publisher.')
+    }
+    Write-Host '[+] Process-only script execution enabled for this session.' -ForegroundColor Green
+}
+
 function Get-PublicScript([string]$FileName, [string]$TargetDir) {
     $uri = "$rawBase/$FileName"
     $destination = Join-Path $TargetDir $FileName
@@ -49,6 +77,7 @@ try {
         Write-Host '[*] Tray Mode already active. Right-click its notification-area icon and choose Exit before updating.' -ForegroundColor Yellow
         return
     }
+    Ensure-LocalScriptPolicy
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     [IO.Directory]::CreateDirectory($appRoot) | Out-Null
     [IO.Directory]::CreateDirectory($installDir) | Out-Null
@@ -80,7 +109,7 @@ try {
     $psExe = Join-Path $PSHOME 'powershell.exe'
     $quotedHost = '"' + $hostScript + '"'
     $quotedClient = '"' + $clientScript + '"'
-    $arguments = @('-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-File', $quotedHost, '-LauncherPath', $quotedClient)
+    $arguments = @('-NoProfile', '-STA', '-ExecutionPolicy', 'RemoteSigned', '-WindowStyle', 'Hidden', '-File', $quotedHost, '-LauncherPath', $quotedClient)
     $proc = Start-Process -FilePath $psExe -ArgumentList $arguments -WindowStyle Hidden -PassThru
     Start-Sleep -Milliseconds 1200
     $proc.Refresh()
