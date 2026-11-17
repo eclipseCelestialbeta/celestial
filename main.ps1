@@ -42,10 +42,10 @@ function Ensure-LocalScriptPolicy {
     if ($machine -ne 'Undefined' -or $user -ne 'Undefined') {
         throw "Script policy managed by administrator (MachinePolicy=$machine; UserPolicy=$user). Use an approved signed installer."
     }
-    Write-Host 'Windows bloqueou scripts locais. A permissao solicitada vale apenas para esta sessao.' -ForegroundColor Yellow
-    Write-Host 'Os scripts vem do GitHub oficial e sao verificados por SHA256. Revise antes de autorizar.'
-    $answer = Read-Host 'Permitir scripts locais nesta sessao? Digite YES'
-    if ($answer -cne 'YES') { throw 'Cancelled. No policy was changed.' }
+    Write-Host '[!] Windows is blocking local PowerShell scripts. This change applies only to this session.' -ForegroundColor Yellow
+    Write-Host 'Review the downloaded scripts before allowing them to run.'
+    $answer = (Read-Host 'Allow local scripts for this session? (Y/N)').Trim()
+    if ($answer -notmatch '^(?i:y|yes)$') { throw 'Cancelled. Execution policy was not changed.' }
     Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop
     if ((Get-ExecutionPolicy) -in @('Restricted','AllSigned')) { throw 'Windows still blocks local scripts; use a signed installer.' }
 }
@@ -77,10 +77,6 @@ try {
         Write-Host '[!] Old Tray Mode is still running. Right-click its icon and choose Exit before updating.' -ForegroundColor Yellow
         return
     }
-    Write-Host 'Session Watch: monitor opcional em segundo plano, visivel no Gerenciador de Tarefas.' -ForegroundColor Cyan
-    Write-Host 'Sem inicio automatico com o Windows. Para sair: Parar-SessionWatch.ps1.'
-    $consent = Read-Host 'Instalar e iniciar o monitor? Digite YES'
-    if ($consent -cne 'YES') { Write-Host '[*] Cancelled by user.'; return }
     Ensure-LocalScriptPolicy
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     [IO.Directory]::CreateDirectory($appRoot) | Out-Null
@@ -96,18 +92,29 @@ try {
         Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
     }
     $clientScript = Join-Path $installDir 'client-main.ps1'
+    # Validate the saved license on every manual launch; if absent or revoked,
+    # the official client prompts for a new key and can save it with Windows DPAPI.
     if (-not (Test-Path -LiteralPath $licenseFile -PathType Leaf)) {
-        Write-Host '[*] First run: validate your key and choose Y to save it for reconnection.' -ForegroundColor Cyan
-        & $clientScript -EnrollOnly
-        if (-not (Test-Path -LiteralPath $licenseFile -PathType Leaf)) {
-            Write-Host '[!] A saved license is required for unattended reconnection.' -ForegroundColor Yellow
-            return
-        }
+        Write-Host '[*] Enter your license key. Choose Y to save it for automatic reconnection.' -ForegroundColor Cyan
     }
+    & $clientScript -EnrollOnly
+    if (-not (Test-Path -LiteralPath $licenseFile -PathType Leaf)) {
+        Write-Host '[!] Save a valid license before enabling automatic reconnection.' -ForegroundColor Yellow
+        return
+    }
+
+    # Explicit opt-in: this separate monitor continues running after the
+    # initial PowerShell window closes. It never starts with Windows.
+    Write-Host '[*] Session Watch runs in the background after this window closes.' -ForegroundColor Cyan
+    $consent = (Read-Host 'Start background monitor? (Y/N)').Trim()
+    if ($consent -notmatch '^(?i:y|yes)$') {
+        Write-Host '[*] Background monitor not started.'
+        return
+    }
+
     & (Join-Path $installDir 'Instalar-SessionWatch.ps1')
     & (Join-Path $installDir 'Iniciar-SessionWatch.ps1')
-    Write-Host '[+] Session Watch instalado. Verifique-o no Gerenciador de Tarefas.' -ForegroundColor Green
-    Write-Host 'Para encerrar: & "$env:LOCALAPPDATA\CelestialLauncher\launcher\Parar-SessionWatch.ps1"'
+    Write-Host '[+] Session Watch started. You can close this PowerShell window.' -ForegroundColor Green
 } catch {
     Write-Host ('[ERROR] ' + $_.Exception.Message) -ForegroundColor Red
     throw
