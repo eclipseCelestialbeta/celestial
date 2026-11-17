@@ -2,7 +2,7 @@
 # Existing license authentication and Cloudflare release are preserved.
 # Starts a user-controlled monitor without a notification-area icon.
 # The monitor is visible in Task Manager as SessionWatch.exe and never autostarts with Windows.
-# To stop it: & "$env:LOCALAPPDATA\CelestialLauncher\launcher\Parar-SessionWatch.ps1"
+# Management/stop instructions are provided with the downloaded installer scripts.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -11,6 +11,7 @@ $rawBase = 'https://raw.githubusercontent.com/eclipseCelestialbeta/celestial/mai
 $appRoot = Join-Path $env:LOCALAPPDATA 'CelestialLauncher'
 $installDir = Join-Path $appRoot 'launcher'
 $licenseFile = Join-Path $appRoot 'license.dat'
+$consentFile = Join-Path $installDir 'background-monitor-consent.txt'
 $trayMutexName = 'Local\CelestialWaitModeTrayHost'
 
 # Pinned public source hashes are refreshed whenever this launcher is published.
@@ -19,7 +20,7 @@ $expected = @{
     'SessionWatch.cs' = '8CC7070C0AEEE4B92210C4ECF80657C997567BF25EF6B5E3C8AB798F5B7C83FA'
     'Instalar-SessionWatch.ps1' = '311575C07B3CDDC0ECE60130A4ED3420EE47B531BEF0E5CEFAE385D9F611A432'
     'Iniciar-SessionWatch.ps1' = 'D18F9AA134DF75F94448881496F50C896B25A7FF34BF3809FD62A330097733C6'
-    'Parar-SessionWatch.ps1' = 'EB256C9F70AA52B6FFB0FC8FD8BA6C67D22A0DB0842E3B37FC0AAE7E0D101016'
+    'Parar-SessionWatch.ps1' = '344B50B6681B189761973ADF96AB7E1422CBEF80C70695B9A84CB6E15BA5C722'
     'Status-SessionWatch.ps1' = '12821E22DB5DDE905BB1D94B52B2C5FB130A0E027F18B5D20396FCCCE5ACC8B8'
 }
 
@@ -103,18 +104,23 @@ try {
         return
     }
 
-    # Explicit opt-in: this separate monitor continues running after the
-    # initial PowerShell window closes. It never starts with Windows.
-    Write-Host '[*] Session Watch runs in the background after this window closes.' -ForegroundColor Cyan
-    $consent = (Read-Host 'Start background monitor? (Y/N)').Trim()
-    if ($consent -notmatch '^(?i:y|yes)$') {
-        Write-Host '[*] Background monitor not started.'
-        return
+    # Remember the user's affirmative choice. First-time background monitoring
+    # must be opt-in; a later manual stop revokes the saved opt-in.
+    $hasConsent = ((Test-Path -LiteralPath $consentFile -PathType Leaf) -and
+        ([IO.File]::ReadAllText($consentFile).Trim() -eq 'enabled'))
+    if (-not $hasConsent) {
+        Write-Host '[*] Session Watch stays active after you close this window.' -ForegroundColor Cyan
+        $consent = (Read-Host 'Enable background monitor? (Y/N)').Trim()
+        if ($consent -notmatch '^(?i:y|yes)$') {
+            Write-Host '[*] Background monitor not started.'
+            return
+        }
+        [IO.File]::WriteAllText($consentFile, 'enabled', [Text.UTF8Encoding]::new($false))
     }
 
     & (Join-Path $installDir 'Instalar-SessionWatch.ps1')
     & (Join-Path $installDir 'Iniciar-SessionWatch.ps1')
-    Write-Host '[+] Session Watch started. You can close this PowerShell window.' -ForegroundColor Green
+    Write-Host '[+] Session Watch started. Manage or stop it with the supplied tools.' -ForegroundColor Green
 } catch {
     Write-Host ('[ERROR] ' + $_.Exception.Message) -ForegroundColor Red
     throw
