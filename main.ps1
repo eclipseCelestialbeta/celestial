@@ -150,6 +150,7 @@ try {
     }
 
     if ($session.accessToken -notmatch '^[A-Fa-f0-9]{64}$' -or
+        $session.launchToken -notmatch '^[A-Fa-f0-9]{64}$' -or
         $session.sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or
         $session.exeSha256 -notmatch '^[A-Fa-f0-9]{64}$') {
         throw 'Server returned an invalid session or manifest.'
@@ -256,7 +257,8 @@ try {
             # If the server has a new release, refuse to run an outdated cached binary.
             Write-Host '[*] Revalidating license for the new game session...' -ForegroundColor Cyan
             $sessionNow = Invoke-LicenseLogin $monitorKey $deviceHash $ApiBase
-            if ($sessionNow.sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or
+            if ($sessionNow.launchToken -notmatch '^[A-Fa-f0-9]{64}$' -or
+                $sessionNow.sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or
                 $sessionNow.exeSha256 -notmatch '^[A-Fa-f0-9]{64}$') {
                 throw 'Server returned an invalid release manifest.'
             }
@@ -283,10 +285,19 @@ try {
             }
 
             Write-Host '[+] Roblox is ready. Launching Nova Application.exe...' -ForegroundColor Green
+            # CELESTIAL_LICENSE_GATE_V104. PowerShell 5.1 inherits process env vars.
             if ($LaunchElevated) {
-                $panelProc = Start-Process -FilePath $binaryPath -WorkingDirectory $releaseDir -Verb RunAs -PassThru
-            } else {
+                throw 'License-gated launch currently requires LaunchElevated = $false.'
+            }
+            $previousToken = [Environment]::GetEnvironmentVariable('CELESTIAL_LAUNCH_TOKEN', 'Process')
+            $previousDevice = [Environment]::GetEnvironmentVariable('CELESTIAL_DEVICE_HASH', 'Process')
+            try {
+                [Environment]::SetEnvironmentVariable('CELESTIAL_LAUNCH_TOKEN', $sessionNow.launchToken, 'Process')
+                [Environment]::SetEnvironmentVariable('CELESTIAL_DEVICE_HASH', $deviceHash, 'Process')
                 $panelProc = Start-Process -FilePath $binaryPath -WorkingDirectory $releaseDir -PassThru
+            } finally {
+                [Environment]::SetEnvironmentVariable('CELESTIAL_LAUNCH_TOKEN', $previousToken, 'Process')
+                [Environment]::SetEnvironmentVariable('CELESTIAL_DEVICE_HASH', $previousDevice, 'Process')
             }
             $panelClosedByUser = $false
             while ($true) {
